@@ -1,21 +1,28 @@
 import asyncio
 import logging
 import os
+import secrets
 from html import escape
+from hmac import compare_digest
 
 import aiohttp
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F
+from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
-    Message,
-    InlineKeyboardMarkup,
     InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    Update,
 )
-from aiogram.client.default import DefaultBotProperties
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "").strip()
+PORT = int(os.getenv("PORT", "10000"))
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "").strip() or secrets.token_urlsafe(32)
 YOUTUBE_API_URL = "https://www.googleapis.com/youtube/v3/search"
 
 logging.basicConfig(
@@ -25,22 +32,30 @@ logging.basicConfig(
 log = logging.getLogger("telegram-music-bot")
 
 dp = Dispatcher()
+bot = (
+    Bot(
+        token=BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
+    if BOT_TOKEN
+    else None
+)
 
 
 def youtube_results_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
     rows = []
     for item in items:
         video_id = item.get("id", {}).get("videoId")
-        snippet = item.get("snippet", {})
-        title = snippet.get("title", "Untitled")
-        if not video_id:
-            continue
-        rows.append([
-            InlineKeyboardButton(
-                text=f"▶ {title[:55]}",
-                url=f"https://www.youtube.com/watch?v={video_id}",
+        title = item.get("snippet", {}).get("title", "Untitled")
+        if video_id:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"▶ {title[:55]}",
+                        url=f"https://www.youtube.com/watch?v={video_id}",
+                    )
+                ]
             )
-        ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -59,8 +74,7 @@ async def search_youtube(query: str) -> list[dict]:
             payload = await response.json()
             if response.status != 200:
                 reason = (
-                    payload.get("error", {})
-                    .get("message", "YouTube API request failed")
+                    payload.get("error", {}).get("message", "YouTube API request failed")
                 )
                 raise RuntimeError(reason)
             return payload.get("items", [])
@@ -98,7 +112,7 @@ async def search_command(message: Message) -> None:
     if not YOUTUBE_API_KEY:
         await message.answer(
             "YouTube API anahtarı henüz ayarlanmamış. "
-            "GitHub/hosting ortamına <code>YOUTUBE_API_KEY</code> değişkenini ekle."
+            "Render ortamına <code>YOUTUBE_API_KEY</code> değişkenini ekle."
         )
         return
 
@@ -132,10 +146,9 @@ async def search_command(message: Message) -> None:
 
 @dp.message(F.audio)
 async def received_audio(message: Message, bot: Bot) -> None:
-    audio = message.audio
     await bot.send_audio(
         chat_id=message.chat.id,
-        audio=audio.file_id,
+        audio=message.audio.file_id,
         caption="🎵 Gönderdiğin ses dosyası",
     )
 
@@ -155,17 +168,62 @@ async def received_document(message: Message, bot: Bot) -> None:
         )
 
 
-async def main() -> None:
-    if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN environment variable is required")
-
-    bot = Bot(
-        token=BOT_TOKEN,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+async def health(_: web.Request) -> web.Response:
+    return web.json_response(
+        {"status": "ok", "bot_configured": bot is not None, "mode": "webhook"}
     )
-    log.info("Bot is starting")
-    await dp.start_polling(bot)
+
+
+async def telegram_webhook(request: web.Request) -> web.Response:
+    if bot is None:
+        return web.json_response({"error": "BOT_TOKEN is not configured"}, status=503)
+
+    supplied_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    if not compare_digest(supplied_secret, WEBHOOK_SECRET):
+        return web.Response(status=403, text="Forbidden")
+
+    try:
+        update = Update.model_validate(await request.json(), context={"bot": bot})
+        await dp.feed_update(bot, update)
+    except Exception:
+        log.exception("Failed to process Telegram update")
+        return web.Response(status=500, text="Update processing failed")
+
+    return web.Response(text="OK")
+
+
+async def on_startup(_: web.Application) -> None:
+    if bot is None:
+        log.error("BOT_TOKEN is missing. Add it in Render Environment settings.")
+        return
+    if not RENDER_EXTERNAL_URL:
+        log.error("RENDER_EXTERNAL_URL is missing; Telegram webhook was not registered.")
+        return
+
+    webhook_url = f"{RENDER_EXTERNAL_URL}/webhook/{WEBHOOK_SECRET}"
+    await bot.set_webhook(
+        url=webhook_url,
+        secret_token=WEBHOOK_SECRET,
+        allowed_updates=dp.resolve_used_update_types(),
+        drop_pending_updates=False,
+    )
+    log.info("Telegram webhook registered: %s", RENDER_EXTERNAL_URL)
+
+
+async def on_shutdown(_: web.Application) -> None:
+    if bot is not None:
+        await bot.session.close()
+
+
+def create_app() -> web.Application:
+    app = web.Application()
+    app.router.add_get("/", health)
+    app.router.add_get("/health", health)
+    app.router.add_post(f"/webhook/{WEBHOOK_SECRET}", telegram_webhook)
+    app.on_startup.append(on_startup)
+    app.on_shutdown.append(on_shutdown)
+    return app
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    web.run_app(create_app(), host="0.0.0.0", port=PORT)
