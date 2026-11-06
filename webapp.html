@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#090812"><title>Nyxel Music</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root{color-scheme:dark;--bg:#090812;--panel:#151323;--muted:#9691aa;--purple:#9b75ff;--line:#29243b}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 50% -15%,#39245f 0,transparent 48%),var(--bg);color:#f7f4ff;font:15px Inter,system-ui,sans-serif;padding:18px 16px 34px}
+header{display:flex;align-items:center;justify-content:space-between;margin:6px 0 24px}.brand{font-weight:850;font-size:20px;letter-spacing:.4px}.brand span{color:var(--purple)}.tag{font-size:11px;color:#c7b7ff;background:#281d42;padding:7px 10px;border-radius:20px}
+h1{font-size:27px;line-height:1.12;margin:0 0 8px} .sub{color:var(--muted);margin:0 0 20px}
+.search{display:flex;gap:8px;margin-bottom:18px}.search input{min-width:0;flex:1;background:var(--panel);border:1px solid var(--line);border-radius:14px;color:white;padding:14px;font-size:15px;outline:none}.search input:focus{border-color:var(--purple)}button{border:0;color:white;cursor:pointer}.search button{background:var(--purple);border-radius:14px;padding:0 17px;font-weight:750}
+.player{background:linear-gradient(145deg,#211a36,#12101c);border:1px solid #34294c;border-radius:22px;padding:14px;margin:12px 0 22px;box-shadow:0 18px 55px #0005}
+.player-top{display:flex;align-items:center;gap:12px;margin-bottom:12px}.cover{width:62px;height:62px;border-radius:13px;object-fit:cover;background:#28223a}.track{min-width:0;flex:1}.track b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.track small{display:block;color:var(--muted);margin-top:5px}
+#ytplayer{width:100%;aspect-ratio:16/9;border-radius:14px;overflow:hidden;background:#050509}#ytplayer iframe{width:100%;height:100%;border:0}
+.controls{display:flex;justify-content:center;align-items:center;gap:24px;padding:12px 0 2px}.controls button{background:#29233a;width:42px;height:42px;border-radius:50%;font-size:18px}.controls .main{width:54px;height:54px;background:var(--purple);font-size:22px}
+.section{font-weight:800;margin:20px 0 12px}.results{display:flex;flex-direction:column;gap:9px}.result{display:flex;align-items:center;gap:11px;background:var(--panel);border:1px solid var(--line);padding:10px;border-radius:15px;text-align:left;width:100%}.result img{width:58px;height:58px;object-fit:cover;border-radius:10px;background:#28223a}.meta{min-width:0;flex:1}.meta b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}.meta small{display:block;color:var(--muted);margin-top:5px}.play{background:#2a2140;color:#d9caff;border-radius:50%;width:38px;height:38px;font-size:16px}.hint{font-size:12px;color:var(--muted);line-height:1.5;margin-top:16px}.empty{color:var(--muted);text-align:center;padding:24px 10px}.error{color:#ff9eae}
+</style></head>
+<body>
+<header><div class="brand">VYRA<span>·</span>MUSIC</div><div class="tag">TELEGRAM MINI APP</div></header>
+<h1>Müziğini keşfet.</h1><p class="sub">YouTube'da ara, resmi oynatıcıda dinle.</p>
+<form class="search" id="searchForm"><input id="query" placeholder="Şarkı veya sanatçı ara..." autocomplete="off"><button type="submit">Ara</button></form>
+<section class="player">
+ <div class="player-top"><img class="cover" id="cover" alt=""><div class="track"><b id="nowTitle">Henüz şarkı seçilmedi</b><small id="nowArtist">Bir sonuç seçerek başla</small></div></div>
+ <div id="ytplayer"></div>
+ <div class="controls"><button id="prev" aria-label="Önceki">↶</button><button class="main" id="toggle" aria-label="Oynat">▶</button><button id="next" aria-label="Sonraki">↷</button></div>
+</section>
+<div class="section" id="resultTitle">Popüler aramalar</div><div class="results" id="results"><div class="empty">Bir şarkı veya sanatçı ara.</div></div>
+<p class="hint">Oynatma YouTube'un resmi gömülü oynatıcısı üzerinden yapılır. Bu Mini App MP3 indirme veya Telegram'a ses dosyası aktarma yapmaz. YouTube reklamları ve oynatma kısıtlamaları geçerlidir.</p>
+<script>
+const tg=window.Telegram?.WebApp;tg?.ready();tg?.expand();
+let player=null,tracks=[],index=-1,ready=false,playing=false;
+const $=id=>document.getElementById(id);
+function showTrack(i,autoplay=true){if(!tracks.length)return;index=(i+tracks.length)%tracks.length;const t=tracks[index];$("nowTitle").textContent=t.title;$("nowArtist").textContent=t.artist;$("cover").src=t.thumbnail||"";if(ready){player.loadVideoById(t.id);if(!autoplay)player.pauseVideo();}}
+window.onYouTubeIframeAPIReady=()=>{player=new YT.Player("ytplayer",{width:"100%",height:"100%",videoId:"",playerVars:{playsinline:1,rel:0},events:{onReady:()=>{ready=true},onStateChange:e=>{playing=e.data===YT.PlayerState.PLAYING;$("toggle").textContent=playing?"Ⅱ":"▶";if(e.data===YT.PlayerState.ENDED)showTrack(index+1)}}})};
+const script=document.createElement("script");script.src="https://www.youtube.com/iframe_api";document.head.appendChild(script);
+async function search(q){$("resultTitle").textContent="Aranıyor…";$("results").innerHTML='<div class="empty">Sonuçlar getiriliyor…</div>';try{const r=await fetch("/api/search?q="+encodeURIComponent(q));const d=await r.json();if(!r.ok)throw new Error(d.error||"Arama başarısız");tracks=d.items||[];index=-1;$("resultTitle").textContent=tracks.length+" sonuç bulundu";$("results").innerHTML=tracks.length?"":'<div class="empty">Sonuç bulunamadı.</div>';tracks.forEach((t,i)=>{const b=document.createElement("button");b.className="result";const img=document.createElement("img");img.src=t.thumbnail;const m=document.createElement("span");m.className="meta";const title=document.createElement("b");title.textContent=t.title;const artist=document.createElement("small");artist.textContent=t.artist;m.append(title,artist);const p=document.createElement("span");p.className="play";p.textContent="▶";b.append(img,m,p);b.onclick=()=>showTrack(i);$("results").append(b)});}catch(e){$("resultTitle").textContent="Arama hatası";$("results").innerHTML='<div class="empty error"></div>';$("results").firstChild.textContent=e.message}}
+$("searchForm").addEventListener("submit",e=>{e.preventDefault();const q=$("query").value.trim();if(q)search(q)});
+$("toggle").onclick=()=>{if(!ready){return}if(index<0){if(tracks.length)showTrack(0);return}playing?player.pauseVideo():player.playVideo()};
+$("prev").onclick=()=>showTrack(index-1);$("next").onclick=()=>showTrack(index+1);
+</script></body></html>
