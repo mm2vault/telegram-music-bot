@@ -3,6 +3,7 @@ import logging
 import os
 import secrets
 from html import escape
+from pathlib import Path
 from hmac import compare_digest
 
 import aiohttp
@@ -16,6 +17,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
     Update,
+    WebAppInfo,
 )
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
@@ -24,6 +26,8 @@ PORT = int(os.getenv("PORT", "10000"))
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "").strip() or secrets.token_urlsafe(32)
 YOUTUBE_API_URL = "https://www.googleapis.com/youtube/v3/search"
+WEBAPP_URL = f"{RENDER_EXTERNAL_URL}/app" if RENDER_EXTERNAL_URL else ""
+WEBAPP_HTML = Path(__file__).with_name("webapp.html")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -82,12 +86,18 @@ async def search_youtube(query: str) -> list[dict]:
 
 @dp.message(CommandStart())
 async def start(message: Message) -> None:
+    keyboard = None
+    if WEBAPP_URL:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="🎧 Müzik oynatıcıyı aç", web_app=WebAppInfo(url=WEBAPP_URL))
+        ]])
     await message.answer(
         "🎧 <b>Music Bot'a hoş geldin!</b>\n\n"
         "Bir şarkı bulmak için:\n"
         "<code>/search şarkı adı - sanatçı</code>\n\n"
         "YouTube sonuçlarını listelerim. Bana gönderdiğin ses "
-        "dosyalarını da Telegram müzik formatında geri gönderebilirim."
+        "dosyalarını da Telegram müzik formatında geri gönderebilirim.",
+        reply_markup=keyboard,
     )
 
 
@@ -168,6 +178,40 @@ async def received_document(message: Message, bot: Bot) -> None:
         )
 
 
+async def mini_app(_: web.Request) -> web.Response:
+    if not WEBAPP_HTML.exists():
+        return web.Response(text="Mini App dosyası bulunamadı.", status=404)
+    return web.FileResponse(WEBAPP_HTML)
+
+
+async def api_search(request: web.Request) -> web.Response:
+    query = (request.query.get("q") or "").strip()[:150]
+    if not query:
+        return web.json_response({"items": []})
+    if not YOUTUBE_API_KEY:
+        return web.json_response({"error": "YouTube API anahtarı ayarlanmamış."}, status=503)
+    try:
+        items = await search_youtube(query)
+        results = []
+        for item in items:
+            video_id = item.get("id", {}).get("videoId")
+            snippet = item.get("snippet", {})
+            if not video_id:
+                continue
+            thumbs = snippet.get("thumbnails", {})
+            thumbnail = (thumbs.get("high") or thumbs.get("medium") or thumbs.get("default") or {}).get("url", "")
+            results.append({
+                "id": video_id,
+                "title": snippet.get("title", "Başlıksız"),
+                "artist": snippet.get("channelTitle", ""),
+                "thumbnail": thumbnail,
+            })
+        return web.json_response({"items": results})
+    except Exception as exc:
+        log.exception("Mini App YouTube search failed")
+        return web.json_response({"error": str(exc)[:300]}, status=502)
+
+
 async def health(_: web.Request) -> web.Response:
     return web.json_response(
         {"status": "ok", "bot_configured": bot is not None, "mode": "webhook"}
@@ -219,6 +263,8 @@ def create_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/", health)
     app.router.add_get("/health", health)
+    app.router.add_get("/app", mini_app)
+    app.router.add_get("/api/search", api_search)
     app.router.add_post(f"/webhook/{WEBHOOK_SECRET}", telegram_webhook)
     app.on_startup.append(on_startup)
     app.on_shutdown.append(on_shutdown)
