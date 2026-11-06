@@ -4,6 +4,7 @@ import os
 import secrets
 from html import escape
 from pathlib import Path
+from urllib.parse import quote
 from hmac import compare_digest
 
 import aiohttp
@@ -46,21 +47,16 @@ bot = (
 )
 
 
-def youtube_results_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
-    rows = []
-    for item in items:
-        video_id = item.get("id", {}).get("videoId")
-        title = item.get("snippet", {}).get("title", "Untitled")
-        if video_id:
-            rows.append(
-                [
-                    InlineKeyboardButton(
-                        text=f"▶ {title[:55]}",
-                        url=f"https://www.youtube.com/watch?v={video_id}",
-                    )
-                ]
-            )
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+def youtube_results_keyboard(query: str) -> InlineKeyboardMarkup | None:
+    if not WEBAPP_URL:
+        return None
+    app_url = f"{WEBAPP_URL}?q={quote(query)}"
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="🎧 Sonuçları Telegram müzik ekranında aç",
+            web_app=WebAppInfo(url=app_url),
+        )
+    ]])
 
 
 async def search_youtube(query: str) -> list[dict]:
@@ -142,7 +138,7 @@ async def search_command(message: Message) -> None:
 
         await status.edit_text(
             "\n\n".join(lines),
-            reply_markup=youtube_results_keyboard(items),
+            reply_markup=youtube_results_keyboard(query),
             disable_web_page_preview=True,
         )
     except Exception as exc:
